@@ -1,0 +1,172 @@
+name: Test
+
+# Exercises the committed dist/ against the real GitHub API, in this repo, on
+# throwaway branches. The unit tests use a stubbed API client, so they cannot
+# catch a malformed ref path or a token that lacks the permission it needs.
+#
+# Not run on pull_request: fork PRs get a read-only token, so the API calls
+# below would fail for reasons that say nothing about the action.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror onto a throwaway branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Create the fixture branches
+        id: fixtures
+        run: |
+          set -eux
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          behind="ci/mirror-behind-${suffix}"
+          ahead="ci/mirror-ahead-${suffix}"
+
+          # One commit behind HEAD, so moving it to HEAD is a fast-forward and
+          # needs no force.
+          git branch "$behind" "${GITHUB_SHA}^"
+          git push origin "$behind"
+
+          # One commit ahead of HEAD on its own line, so moving it back to HEAD
+          # discards that commit and is only possible with force.
+          git checkout -b "$ahead" "$GITHUB_SHA"
+          git commit --allow-empty -m "Commit that only exists on $ahead"
+          git push origin "$ahead"
+          git checkout --detach "$GITHUB_SHA"
+
+          {
+            echo "behind=$behind"
+            echo "ahead=$ahead"
+            echo "ahead_sha=$(git rev-parse "$ahead")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fast-forward without force
+        uses: ./
+        with:
+          target-branch: ${{ steps.fixtures.outputs.behind }}
+          force: 'false'
+
+      - name: Assert the fast-forward landed
+        env:
+          BRANCH: ${{ steps.fixtures.outputs.behind }}
+        run: |
+          set -eu
+          actual="$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
+          echo "expected $GITHUB_SHA, got $actual"
+          test "$actual" = "$GITHUB_SHA"
+
+      - name: Rewind without force, which must be refused
+        id: refused
+        continue-on-error: true
+        uses: ./
+        with:
+          target-branch: ${{ steps.fixtures.outputs.ahead }}
+          force: 'false'
+
+      - name: Assert the rewind was refused and changed nothing
+        env:
+          BRANCH: ${{ steps.fixtures.outputs.ahead }}
+          BEFORE: ${{ steps.fixtures.outputs.ahead_sha }}
+          OUTCOME: ${{ steps.refused.outcome }}
+        run: |
+          set -eu
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::expected the unforced rewind to fail, got $OUTCOME"
+            exit 1
+          fi
+
+          actual="$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
+          if [ "$actual" != "$BEFORE" ]; then
+            echo "::error::a refused update still moved $BRANCH to $actual"
+            exit 1
+          fi
+
+      - name: Rewind with force
+        uses: ./
+        with:
+          target-branch: ${{ steps.fixtures.outputs.ahead }}
+          force: 'true'
+
+      - name: Assert the forced rewind landed
+        env:
+          BRANCH: ${{ steps.fixtures.outputs.ahead }}
+        run: |
+          set -eu
+          actual="$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
+          echo "expected $GITHUB_SHA, got $actual"
+          test "$actual" = "$GITHUB_SHA"
+
+      - name: Delete the fixture branches
+        if: always()
+        env:
+          BEHIND: ${{ steps.fixtures.outputs.behind }}
+          AHEAD: ${{ steps.fixtures.outputs.ahead }}
+        run: |
+          # Best effort: a leaked test branch is untidy but not a failure, and
+          # masking a real failure behind cleanup noise would be worse.
+          for branch in "$BEHIND" "$AHEAD"; do
+            [ -n "$branch" ] || continue
+            git push origin --delete "$branch" || echo "could not delete $branch"
+          done
+
+  reject-missing-branch:
+    name: Absent branch fails the step
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Target a branch that does not exist
+        id: absent
+        continue-on-error: true
+        uses: ./
+        with:
+          target-branch: ci/mirror-branch-does-not-exist-${{ github.run_id }}
+
+      - name: Assert the step failed rather than creating the branch
+        env:
+          BRANCH: ci/mirror-branch-does-not-exist-${{ github.run_id }}
+          OUTCOME: ${{ steps.absent.outcome }}
+        run: |
+          set -eu
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::expected failure for a missing branch, got $OUTCOME"
+            exit 1
+          fi
+
+          # updateRef moves an existing ref; it must not create one.
+          if [ -n "$(git ls-remote origin "refs/heads/$BRANCH")" ]; then
+            echo "::error::the action created $BRANCH instead of failing"
+            git push origin --delete "$BRANCH" || true
+            exit 1
+          fi
