@@ -1,0 +1,43 @@
+{
+  "name": "@step-security/mirror-branch",
+  "version": "1.0.4",
+  "description": "Mirrors the branch a workflow runs on onto another branch.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "ncc build src/index.ts -o dist --minify",
+    "all": "npm run typecheck && npm run test && npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/step-security/mirror-branch.git"
+  },
+  "keywords": [
+    "actions",
+    "github",
+    "branch",
+    "mirror",
+    "git"
+  ],
+  "author": "step-security",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/step-security/mirror-branch/issues"
+  },
+  "homepage": "https://github.com/step-security/mirror-branch#readme",
+  "dependencies": {
+    "@actions/core": "^3.0.1",
+    "@actions/github": "^9.1.1",
+    "axios": "^1.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@vercel/ncc": "0.45.0",
+    "typescript": "5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

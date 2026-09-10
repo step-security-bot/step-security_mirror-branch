@@ -1,0 +1,25 @@
+name: 'Mirror Branch'
+description: 'Keeps a second branch pointing at whatever commit this workflow ran on'
+branding:
+  icon: 'git-branch'
+  color: 'orange'
+inputs:
+  target-branch:
+    description: 'Name of the branch to move'
+    required: false
+    default: 'master'
+  token:
+    description: >
+      Token used to authenticate against the GitHub API. Leave it unset to use
+      the token the runner provisions for the workflow.
+    required: false
+    default: ${{ github.token }}
+  force:
+    description: >
+      Set to false to refuse updates that would discard commits already on the
+      target branch. Defaults to true, which allows them.
+    required: false
+    default: 'true'
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
